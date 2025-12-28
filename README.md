@@ -5,3 +5,8 @@ Project Objectives:
 - Ability to set rules e.g. certain access hours, certain branches
 - Full logging which is encrypted and only accessable to a master account with password
 - UI made with PyQt or Electron
+
+# Step 1 : creating a permanent ECC keypair for each client and resource
+
+# Step 2 : creating a manual SQL file which stores the information about each resource
+- Resource can hold SQL listing allowed files
