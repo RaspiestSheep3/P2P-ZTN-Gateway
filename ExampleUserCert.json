@@ -1,0 +1,29 @@
+{
+    "Name" : "John Smith",
+    "ID" : "ExampleID",
+    "Title" : "Head Engineer",
+    "Public Key" : "12345",
+    "Permissions" : {
+        "Engineering LVL 1" : "WRITE",
+        "Engineering LVL 2" : "WRITE",
+        "Management LVL 1" : "READ"
+    },
+    "Expiry Date" : "12/34/56",
+    "Login Days" : {
+        "Mon" : true,
+        "Tue" : true,
+        "Wed" : true,
+        "Thu" : true,
+        "Fri" : true,
+        "Sat" : false,
+        "Sun" : false
+    },
+    "Start Time" : "09:00",
+    "End Time" : "17:00",
+    "Algorithm Used" : "Ed25519",
+    "Issuer" : "Uncle Sam",
+    "Issue Date" : "78/90/12",
+    "Serial" : 1234567890,
+    "Certifiate Version" : 1,
+    "Signature" : "12345"
+}

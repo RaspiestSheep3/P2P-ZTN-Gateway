@@ -1,0 +1,12 @@
+{
+    "Name" : "Resource 1",
+    "ID" : "ExampleResourceID",
+    "Public Key" : "12345",
+    "Algorithm Used" : "Ed25519",
+    "Issuer" : "Uncle Sam",
+    "Issue Date" : "78/90/12",
+    "Serial" : 1234567890,
+    "Certifiate Version" : 1,
+    "Expiry" : "12/34/56",
+    "Signature" : "12345"
+}

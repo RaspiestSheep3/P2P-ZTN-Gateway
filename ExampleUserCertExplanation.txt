@@ -1,0 +1,30 @@
+{
+    "Name" : "John Smith",
+    "ID" : "ExampleID",
+    "Title" : "Head Engineer",
+    "Public Key" : "12345", - This is a b64 of the public key 
+    "Permissions" : {
+        "Engineering LVL 1" : "WRITE",
+        "Engineering LVL 2" : "WRITE",
+        "Management LVL 1" : "READ"
+    },
+    "Expiry Date" : "12/34/56", - Certificate expires at 00:00 on this day
+    "Login Days" : { - Access is blocked outside of these days
+        "Mon" : true,
+        "Tue" : true,
+        "Wed" : true,
+        "Thu" : true,
+        "Fri" : true,
+        "Sat" : false,
+        "Sun" : false
+    },
+    "Start Time" : "09:00", - Access is denied outside of these times
+    "End Time" : "17:00",
+    "Algorithm Used" : "Ed25519", - Stops algorithm confusion attacks
+    "Issuer" : "Uncle Sam",
+    "Issue Date" : "78/90/12",
+    "Serial" : 1234567890, - This describes this certificate specifically, whereas ID describes the user
+    "Certifiate Version" : 1,
+    "Signature" : "12345" - B64 signature from the authority signing the cert
+}
+

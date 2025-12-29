@@ -64,7 +64,6 @@ def CreateECCKeypair():
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()  
-        #NTS : Later "decide" to use password with BestAvailableEncryption for security
     )
     with open("ClientECCPrivateKey.pem", "wb") as f:
         f.write(pemPrivate)
