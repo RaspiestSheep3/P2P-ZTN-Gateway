@@ -15,6 +15,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 INCOMING_CONNECTION_HOST = "0.0.0.0"
 INCOMING_CONNECTION_PORT = 12346
 SERVER_CONNECTION_PORT = 12345
+CERT_PATH = "UserJohnSmith1Certificate.json"
+MASTER_PUBLIC_KEY_PEM = "MasterECCPublicKey.pem"
 
 #Logging setup
 logFormatter = colorlog.ColoredFormatter(
@@ -54,6 +56,15 @@ logger.setLevel(logging.DEBUG)
 logger.addHandler(consoleLogHandler) 
 logger.addHandler(generalLogHandler)    
 logger.addHandler(errorLogHandler) 
+
+def IncrementNonce(oldNonce : bytes, increment : int):
+    try:
+        oldNonceInt = int.from_bytes(oldNonce, byteorder="big")
+        oldNonceInt = (oldNonceInt + increment) % (1 << 96) #Wraparound
+        nonce = oldNonceInt.to_bytes(12, byteorder="big")
+        return nonce
+    except Exception as e:
+        logger.error(f"Error {e} in IncrementNonce", exc_info=True)
 
 #Keypair generation
 def CreateECCKeypair():
@@ -102,7 +113,40 @@ def ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes):
         info=b"Client-Resource Handshake",
     ).derive(ephemeralSecret)
 
-    aes = AESGCM(serverAESKey)        
+    aes = AESGCM(serverAESKey) 
+    
+    #Loading in the cert info 
+    with open(CERT_PATH, "r") as fileHandle:
+        certInfo = json.loads(fileHandle.read())
+
+    #Transmission of cert
+    nonce = os.urandom(12)
+    clientCertInfoEncrypted = aes.encrypt(nonce, json.dumps(certInfo).encode(), None)
+    
+    resourceSocket.send(nonce)
+    resourceSocket.send(clientCertInfoEncrypted.ljust(2048, b"\0"))
+           
+    #Receiving cert
+    resourceCertInfoEncrypted = resourceSocket.recv(2048).rstrip(b"\0")
+    resourceCertInfo = json.loads(aes.decrypt(IncrementNonce(nonce, 1), resourceCertInfoEncrypted, None).decode())
+    
+    #Signature test
+    signature = resourceCertInfo.pop("Signature")
+    
+    with open(MASTER_PUBLIC_KEY_PEM, "rb") as f:
+        masterKey = serialization.load_pem_public_key(f.read())
+
+    try:
+        masterKey.verify(
+            base64.b64decode(signature),
+            json.dumps(resourceCertInfo).encode(),
+            ec.ECDSA(hashes.SHA256())   
+        )
+        logger.debug("Signature valid")
+    except Exception as e:
+        logger.error(f"Invalid signature : {e}")
+        return
+           
     return resourceSocket, aes
 
 #Ephemeral Key Creation
