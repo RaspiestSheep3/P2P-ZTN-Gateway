@@ -7,8 +7,9 @@ import logging
 import sqlite3
 import colorlog
 import threading
-from datetime import datetime, timezone, timedelta
 from cryptography.hazmat.primitives import hashes
+from datetime import datetime, timezone, timedelta
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -21,6 +22,10 @@ RESOURCE_LABEL = "Resource1"
 CERT_PATH = "ResourceManagementResource1Certificate.json"
 MASTER_PUBLIC_KEY_PEM = "MasterECCPublicKey.pem"
 SESSION_TOKEN_EXPIRY_TIME = timedelta(minutes=30)
+
+#Runtime variables
+loadedAES = dict()
+privateKey, privateKeyBytes, publicKey, publicKeyBytes = None, None, None, None
 
 #Logging setup
 logFormatter = colorlog.ColoredFormatter(
@@ -73,6 +78,7 @@ def IncrementNonce(oldNonce : bytes, increment : int):
         
 #Keypair generation
 def CreateECCKeypair():
+    global privateKey, publicKey, privateKeyBytes, publicKeyBytes
     privateKey = ec.generate_private_key(ec.SECP256R1())
     publicKey = privateKey.public_key()
 
@@ -91,11 +97,47 @@ def CreateECCKeypair():
     with open("ResourceECCPublicKey.pem", "wb") as f:
         f.write(pemPublic)
     
+    privateKeyBytes = privateKey.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    
+    publicKeyBytes = publicKey.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )    
+
 def Start():
+    global privateKey, privateKeyBytes, publicKey, publicKeyBytes
     #Listening for information
     incomingConnectionSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     incomingConnectionSocket.bind((INCOMING_CONNECTION_HOST, INCOMING_CONNECTION_PORT))
     incomingConnectionSocket.listen(5)
+    
+    if(os.path.isfile(f"{RESOURCE_LABEL}ECCPrivateKey.pem") and os.path.isfile(f"{RESOURCE_LABEL}ECCPublicKey.pem")):
+        with open(f"{RESOURCE_LABEL}ECCPrivateKey.pem", "rb") as f:
+            privateKey = serialization.load_pem_private_key(
+                f.read(),
+                password=None 
+            )
+                
+        with open(f"{RESOURCE_LABEL}ECCPublicKey.pem", "rb") as f:
+            publicKey = serialization.load_pem_public_key(f.read())
+        
+        privateKeyBytes = privateKey.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        
+        publicKeyBytes = publicKey.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
+        ) 
+    
+    else:
+        CreateECCKeypair() 
 
     logger.info("WAITING FOR REQUESTS")
     while True:
@@ -103,82 +145,156 @@ def Start():
         threading.Thread(target=HandleClient, args=(clientSocket,)).start()
 
 def HandleClient(clientSocket):
-    receivedMessage = json.loads(clientSocket.recv(512).rstrip(b"\0").decode())
-    privateEphemeralKey, publicEphemeralKey = CreateEphemeralECCKey()
-    privateEphemeralKeyBytes = privateEphemeralKey.private_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
-    )
-    publicEphemeralKeyBytes = publicEphemeralKey.public_bytes(
-        encoding=serialization.Encoding.X962,
-        format=serialization.PublicFormat.UncompressedPoint
-    )
-
-    ephemeralKeyData = json.dumps({"Type" : "Client-Resource Ephemeral Key Transmission Response", "publicEphemeralKey" : base64.b64encode(publicEphemeralKeyBytes).decode()})
-    clientSocket.send(ephemeralKeyData.encode().ljust(512, b"\0"))
-
-    #Creating the shared secret
-    clientEphemeralPublicKey = ec.EllipticCurvePublicKey.from_encoded_point(
-        ec.SECP256R1(), 
-        base64.b64decode(receivedMessage["publicEphemeralKey"])
-    )
-    ephemeralSecret = privateEphemeralKey.exchange(ec.ECDH(), clientEphemeralPublicKey)
-
-    #Deriving an AES key
-    clientAESKey = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=b"Client-Resource Handshake",
-    ).derive(ephemeralSecret)
+    global loadedAES
     
-    #Receiving the dummy attempt login
-    aes = AESGCM(clientAESKey)
-    
-    #Receiving cert
-    nonce = clientSocket.recv(12)
-    clientCertInfoEncrypted = clientSocket.recv(2048).rstrip(b"\0")
-    clientCertInfo = json.loads(aes.decrypt(nonce, clientCertInfoEncrypted, None).decode())
-    
-    #Signature test
-    signature = clientCertInfo.pop("Signature")
-    
-    with open(MASTER_PUBLIC_KEY_PEM, "rb") as f:
-        masterKey = serialization.load_pem_public_key(f.read())
-
-    try:
-        masterKey.verify(
-            base64.b64decode(signature),
-            json.dumps(clientCertInfo).encode(),
-            ec.ECDSA(hashes.SHA256())   
+    receivedMessage = json.loads(clientSocket.recv(1024).rstrip(b"\0").decode())
+    if(receivedMessage["Type"] == "Client-Resource Ephemeral Key Transmission"):
+        privateEphemeralKey, publicEphemeralKey = CreateEphemeralECCKey()
+        privateEphemeralKeyBytes = privateEphemeralKey.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
         )
-        logger.debug("Signature valid")
-    except Exception as e:
-        logger.error(f"Invalid signature : {e}")
-        return
+        publicEphemeralKeyBytes = publicEphemeralKey.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
+        )
 
-    #Sending our cert
-    returnNonce = IncrementNonce(nonce, 1)
-    
-    with open(CERT_PATH, "r") as fileHandle:
-        certInfo = json.loads(fileHandle.read())
+        ephemeralKeyData = json.dumps({"Type" : "Client-Resource Ephemeral Key Transmission Response", "publicEphemeralKey" : base64.b64encode(publicEphemeralKeyBytes).decode()})
+        clientSocket.send(ephemeralKeyData.encode().ljust(512, b"\0"))
 
-    #Transmission of cert
-    resourceCertInfoEncrypted = aes.encrypt(returnNonce, json.dumps(certInfo).encode(), None)
+        #Creating the shared secret
+        clientEphemeralPublicKey = ec.EllipticCurvePublicKey.from_encoded_point(
+            ec.SECP256R1(), 
+            base64.b64decode(receivedMessage["publicEphemeralKey"])
+        )
+        ephemeralSecret = privateEphemeralKey.exchange(ec.ECDH(), clientEphemeralPublicKey)
+
+        #Deriving an AES key
+        clientAESKey = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b"Client-Resource Handshake",
+        ).derive(ephemeralSecret)
+        
+        #Receiving the dummy attempt login
+        aes = AESGCM(clientAESKey)
+        
+        #Receiving cert
+        nonce = clientSocket.recv(12)
+        clientCertInfoEncrypted = clientSocket.recv(2048).rstrip(b"\0")
+        clientCertInfo = json.loads(aes.decrypt(nonce, clientCertInfoEncrypted, None).decode())
+        
+        #Signature test
+        signature = clientCertInfo.pop("Signature")
+        
+        with open(MASTER_PUBLIC_KEY_PEM, "rb") as f:
+            masterKey = serialization.load_pem_public_key(f.read())
+
+        try:
+            masterKey.verify(
+                base64.b64decode(signature),
+                json.dumps(clientCertInfo).encode(),
+                ec.ECDSA(hashes.SHA256())   
+            )
+            logger.debug("Signature valid")
+        except Exception as e:
+            logger.error(f"Invalid signature : {e}")
+            return
+
+        #Sending our cert
+        returnNonce = IncrementNonce(nonce, 1)
+        
+        with open(CERT_PATH, "r") as fileHandle:
+            certInfo = json.loads(fileHandle.read())
+
+        #Transmission of cert
+        resourceCertInfoEncrypted = aes.encrypt(returnNonce, json.dumps(certInfo).encode(), None)
+        
+        clientSocket.send(resourceCertInfoEncrypted.ljust(2048, b"\0"))
+        
+        #Sending a session token 
+        #My goal is to minimise the size of this for effiency 
+        #TODO : Check that they are loaded in on correct time before issuing tokens
+        
+        sessionToken = {
+            "ID" : clientCertInfo["ID"],
+            "Issuer" : certInfo["ID"],
+            "Permissions" : clientCertInfo["Permissions"],
+            "Expiry Time" : int((datetime.now(timezone.utc) + SESSION_TOKEN_EXPIRY_TIME).timestamp())
+        }
+        
+        #Signing the token
+        signatureBytes = privateKey.sign(
+            json.dumps(sessionToken).encode(),
+            ec.ECDSA(hashes.SHA256())
+        )
+        
+        sessionToken["Signature"] = base64.b64encode(signatureBytes).decode()
+        
+        #Returning back the session token 
+        sessionTokenEncrypted = aes.encrypt(IncrementNonce(returnNonce, 1), json.dumps(sessionToken).encode(), None)
+        clientSocket.send(sessionTokenEncrypted.ljust(1024, b"\0"))
+        
+        logger.debug(f"session token : {sessionToken}")
+        
+        loadedAES[clientCertInfo["ID"]] = aes
+    elif(receivedMessage["Type"] == "File Request"):
+        requestNonce = base64.b64decode(receivedMessage["Nonce"])
+        aes = loadedAES[receivedMessage["ID"]]
+        userToken = json.loads(aes.decrypt(requestNonce, base64.b64decode(receivedMessage["Token"]), None).decode())
+        fileID = aes.decrypt(IncrementNonce(requestNonce, 1), base64.b64decode(receivedMessage["FileID"]), None).decode()
+
+        #Checking the signature is intact
+        signatureRaw = base64.b64decode(userToken["Signature"])
+        
+        userToken.pop("Signature")
+        
+        try:
+            publicKey.verify(
+                signatureRaw,
+                json.dumps(userToken).encode(),
+                ec.ECDSA(hashes.SHA256())
+            )
+        
+            logger.debug("Signature correct")
+        
+        except InvalidSignature:
+            logger.warning("Signature invalid")
+            return
+        
+        #Checking if the user has correct level permissions for the file they are requesting
+        conn = sqlite3.connect(f"{RESOURCE_LABEL}.db")
+        cursor = conn.cursor()
+        cursor.execute("""SELECT * FROM resourceFiles WHERE fileLabel = ?""", (fileID,))
+        row = cursor.fetchone()
+        
+        status = "Not Allowed"
+        metadata = None
+        if(row != None):
+            acceptedLevels = row[2].split(", ")
+            logger.debug(f"Levels : {acceptedLevels}, {userToken["Permissions"]}")
+            for level in (userToken["Permissions"]):
+                if(level in acceptedLevels):
+                    status = "Allowed"
+                    break
+        
+            if(status == "Allowed"):
+                metadata = {"Size" : os.path.getsize(row[1])}
+        else:
+            logger.debug(f"row : {row}, levels : {acceptedLevels}")
+                
+        #TODO : Send a response with status and metadata if relevant
+        requestResponse = {"Status" : status, "Metadata" : metadata}
+        requestResponseEncrypted = aes.encrypt(IncrementNonce(requestNonce, 2), json.dumps(requestResponse).encode(), None)
+        clientSocket.send(requestResponseEncrypted.ljust(1024, b"\0"))
+
+    #Closing the socket
+    clientSocket.shutdown(socket.SHUT_RDWR)
+    clientSocket.close()
     
-    clientSocket.send(resourceCertInfoEncrypted.ljust(2048, b"\0"))
-    
-    #Sending a session token 
-    #My goal is to minimise the size of this for effiency 
-    sessionToken = {
-        "ID" : clientCertInfo["ID"],
-        "Issuer" : certInfo["ID"],
-        "Permissions" : clientCertInfo["Permissions"],
-        "Expiry Time" : int((datetime.now(timezone.utc) + SESSION_TOKEN_EXPIRY_TIME).timestamp())
-    }
-    
-    logger.debug(f"session token : {sessionToken}")
+    logger.debug(f"Socket closed")
 
 def CreateEphemeralECCKey():
     privateEphemeralKey = ec.generate_private_key(ec.SECP256R1())

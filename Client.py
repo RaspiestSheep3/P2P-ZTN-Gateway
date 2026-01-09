@@ -18,6 +18,9 @@ SERVER_CONNECTION_PORT = 12345
 CERT_PATH = "UserJohnSmith1Certificate.json"
 MASTER_PUBLIC_KEY_PEM = "MasterECCPublicKey.pem"
 
+#Runtime variables
+userID = None
+
 #Logging setup
 logFormatter = colorlog.ColoredFormatter(
             "%(log_color)s%(levelname)s: %(message)s",
@@ -68,6 +71,8 @@ def IncrementNonce(oldNonce : bytes, increment : int):
 
 #Keypair generation
 def CreateECCKeypair():
+    global privateKey, publicKey, privateKeyBytes, publicKeyBytes
+    
     privateKey = ec.generate_private_key(ec.SECP256R1())
     publicKey = privateKey.public_key()
 
@@ -76,25 +81,36 @@ def CreateECCKeypair():
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()  
     )
-    with open("ClientECCPrivateKey.pem", "wb") as f:
+    with open(f"{userID}PrivateKey.pem", "wb") as f:
         f.write(pemPrivate)
         
     pemPublic = publicKey.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    with open("ClientECCPublicKey.pem", "wb") as f:
+    with open(f"{userID}PublicKey.pem", "wb") as f:
         f.write(pemPublic)
-    return privateKey, publicKey
+        
+    privateKeyBytes = privateKey.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        
+    publicKeyBytes = publicKey.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    ) 
 
 #Setting up a connection to the Resource
 
 def ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes): 
+    global userID
     resourceSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     resourceSocket.connect(("127.0.0.1", SERVER_CONNECTION_PORT))
     
     ephemeralKeyData = json.dumps({"Type" : "Client-Resource Ephemeral Key Transmission", "publicEphemeralKey" : base64.b64encode(publicEphemeralKeyBytes).decode()})
-    resourceSocket.send(ephemeralKeyData.encode().ljust(512, b"\0"))
+    resourceSocket.send(ephemeralKeyData.encode().ljust(1024, b"\0"))
     receivedMessage = json.loads(resourceSocket.recv(512).rstrip(b"\0").decode())
     logger.debug(receivedMessage)
 
@@ -118,6 +134,8 @@ def ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes):
     #Loading in the cert info 
     with open(CERT_PATH, "r") as fileHandle:
         certInfo = json.loads(fileHandle.read())
+    
+    userID = certInfo["ID"]
 
     #Transmission of cert
     nonce = os.urandom(12)
@@ -146,9 +164,39 @@ def ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes):
     except Exception as e:
         logger.error(f"Invalid signature : {e}")
         return
-           
-    return resourceSocket, aes
+        
+    #Getting our session token  
+    sessionTokenEncrypted = resourceSocket.recv(1024).rstrip(b"\0")
+    sessionToken = json.loads(aes.decrypt(IncrementNonce(nonce, 2), sessionTokenEncrypted, None).decode())   
+    
+    print(f"sessionToken : {sessionToken}")
+    
+    #Closing the socket
+    resourceSocket.shutdown(socket.SHUT_RDWR)
+    resourceSocket.close()
+    
+    return aes, sessionToken
 
+def RequestFileFromResource(aes, sessionToken, fileID):
+    #Defining the connection
+    resourceSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    resourceSocket.connect(("127.0.0.1", SERVER_CONNECTION_PORT))
+    
+    #Filing the request
+    requestNonce = os.urandom(12)
+    request = {"Nonce" : base64.b64encode(requestNonce).decode(), 
+               "ID" : userID,
+               "Type" : "File Request", 
+               "Token" : base64.b64encode(aes.encrypt(requestNonce, json.dumps(sessionToken).encode(), None)).decode(), 
+               "FileID" : base64.b64encode(aes.encrypt(IncrementNonce(requestNonce, 1), fileID.encode(), None)).decode()}
+
+    resourceSocket.send(json.dumps(request).encode().ljust(1024, b"\0"))
+    
+    #Getting the return metadata
+    resourceReturnMetadataEncrypted = resourceSocket.recv(1024).rstrip(b"\0")
+    resourceReturnMetadata = json.loads(aes.decrypt(IncrementNonce(requestNonce, 2), resourceReturnMetadataEncrypted, None).decode())
+    print(f"Resource Return Metadata : {resourceReturnMetadata}")
+    
 #Ephemeral Key Creation
 def CreateEphemeralECCKeypair():
     privateEphemeralKey = ec.generate_private_key(ec.SECP256R1())
@@ -167,17 +215,38 @@ def CreateEphemeralECCKeypair():
     
     return privateEphemeralKey, publicEphemeralKey, privateEphemeralKeyBytes, publicEphemeralKeyBytes
 
-resourceSocket, aes, privateKey, publicKey = None, None, None, None
+resourceSocket, aes, privateKey, publicKey, privateKeyBytes, publicKeyBytes = None, None, None, None, None, None
 
 def Start():
-    global resourceSocket, aes, privateKey, publicKey
+    global resourceSocket, aes, privateKey, publicKey, privateKeyBytes, publicKeyBytes
     
     #ECC setup
-    privateKey, publicKey = CreateECCKeypair()
+    if(os.path.exists(f"{userID}PrivateKey.pem") and os.path.exists(f"{userID}PublicKey.pem")):
+        with open(f"{userID}PrivateKey.pem", "rb") as f:
+            privateKey = serialization.load_pem_private_key(
+                f.read(),
+                password=None 
+            )
+                
+        with open(f"{userID}PublicKey.pem", "rb") as f:
+            publicKey = serialization.load_pem_public_key(f.read())
+        
+        privateKeyBytes = privateKey.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        
+        publicKeyBytes = publicKey.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
+        ) 
+    else:
+        CreateECCKeypair()
     
     #Resrouce ephmeral pair
     privateEphemeralKey, _, _, publicEphemeralKeyBytes = CreateEphemeralECCKeypair()
-    resourceSocket, aes = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
-
+    aes, sessionToken = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
+    RequestFileFromResource(aes, sessionToken, "Testing2.py")
     
 Start()
