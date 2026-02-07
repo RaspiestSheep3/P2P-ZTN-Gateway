@@ -195,7 +195,26 @@ def RequestFileFromResource(aes, sessionToken, fileID):
     #Getting the return metadata
     resourceReturnMetadataEncrypted = resourceSocket.recv(1024).rstrip(b"\0")
     resourceReturnMetadata = json.loads(aes.decrypt(IncrementNonce(requestNonce, 2), resourceReturnMetadataEncrypted, None).decode())
-    print(f"Resource Return Metadata : {resourceReturnMetadata}")
+    logger.info(f"Resource Return Metadata : {resourceReturnMetadata}")
+    if(resourceReturnMetadata["Status"] != "Allowed"):
+        logger.warning(f"File access denied - returning")
+        return
+    
+    fileSize = resourceReturnMetadata["Metadata"]["Size"]
+    bytesToReceive = fileSize
+    incrementCounter = 3
+    with open(fileID, "wb") as f:
+        while(bytesToReceive > 0):
+            encryptedBlock = resourceSocket.recv(min(bytesToReceive + 16, 65536 + 16))
+            logger.debug(f"Length : {len(encryptedBlock)}")
+            decryptedBlock = aes.decrypt(IncrementNonce(requestNonce, incrementCounter), encryptedBlock, None)
+            f.write(decryptedBlock)
+            bytesToReceive -= len(decryptedBlock)
+            incrementCounter += 1
+    
+    logger.info(f"All blocks received - now closing")
+    resourceSocket.shutdown(socket.SHUT_RDWR)
+    resourceSocket.close() 
     
 #Ephemeral Key Creation
 def CreateEphemeralECCKeypair():
@@ -247,6 +266,6 @@ def Start():
     #Resrouce ephmeral pair
     privateEphemeralKey, _, _, publicEphemeralKeyBytes = CreateEphemeralECCKeypair()
     aes, sessionToken = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
-    RequestFileFromResource(aes, sessionToken, "Testing2.py")
+    RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
     
 Start()

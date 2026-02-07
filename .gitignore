@@ -4,3 +4,4 @@
 *.json
 !ExampleResourceCert.json
 !ExampleUserCert.json
+*.pdf

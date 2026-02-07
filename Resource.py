@@ -289,6 +289,26 @@ def HandleClient(clientSocket):
         requestResponse = {"Status" : status, "Metadata" : metadata}
         requestResponseEncrypted = aes.encrypt(IncrementNonce(requestNonce, 2), json.dumps(requestResponse).encode(), None)
         clientSocket.send(requestResponseEncrypted.ljust(1024, b"\0"))
+        
+        #Sending the data
+        if(status == "Allowed"):
+            filePath = row[1]
+            fileSize = os.path.getsize(filePath)
+            bytesSent = 0
+            nonceCounter = 3
+            
+            logger.debug(f"File path : {filePath}")
+            
+            with open(filePath, "rb") as f:
+                while(bytesSent < fileSize):
+                    decryptedBlock = f.read(min(65536, fileSize - bytesSent))
+                    encryptedBlock = aes.encrypt(IncrementNonce(requestNonce, nonceCounter), decryptedBlock, None)
+                    print(f"Encrypt len : {len(encryptedBlock)}")
+                    clientSocket.send(encryptedBlock)
+                    bytesSent += min(65536, fileSize - bytesSent)
+                    nonceCounter += 1   
+        
+            logger.info(f"All blocks sent")
 
     #Closing the socket
     clientSocket.shutdown(socket.SHUT_RDWR)
@@ -350,3 +370,4 @@ def AssignFilesToSQL(acceptedLevels : list, filePath : str = None, folderPath : 
 
 #AssignFilesToSQL(["Engineering LVL1, Engineering LVL2"], None, r"C:\Users\iniga\OneDrive\Programming\Testing")    
 Start()
+#AssignFilesToSQL(["Engineering LVL1, Engineering LVL2"], "C:\\Users\\iniga\\OneDrive\\Programming\\Testing\\Test PDF.pdf")
