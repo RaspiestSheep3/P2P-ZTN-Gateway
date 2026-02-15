@@ -6,7 +6,7 @@ import logging
 import colorlog
 from werkzeug.utils import secure_filename
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, x25519
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -137,7 +137,6 @@ def CreateResourceCertificate(name : str, ID : str, publicKeyBytesB64 : str, alg
     with open(f"Resource{secure_filename(ID)}Certificate.json", "w") as f:
         json.dump(resourceDict, f, indent=4)
 
-#!TEMP - for testing - in practice the keypair should never be created more than once because this means all previous certs are invalid
 if(not os.path.exists("MasterECCPrivateKey.pem")):
    privateKey, publicKey = CreateECCKeypair() 
 else:
@@ -150,8 +149,67 @@ else:
     with open("MasterECCPublicKey.pem", "rb") as f:
         publicKey = serialization.load_pem_public_key(f.read())
 
+def CreateLogKey():
+    if(os.path.exists("MasterLogPrivateKey.key")):
+        print(f"Exists")
+        with open("MasterLogPrivateKey.key", "rb") as f:
+            privateKey = x25519.X25519PrivateKey.from_private_bytes(f.read())
+
+        with open("MasterLogPublicKey.key", "rb") as f:
+            publicKey = x25519.X25519PublicKey.from_public_bytes(f.read())
+        
+    else:
+        privateKey = x25519.X25519PrivateKey.generate()
+        publicKey = privateKey.public_key()
+
+        # Save private key
+        with open("MasterLogPrivateKey.key", "wb") as f:
+            f.write(
+                privateKey.private_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PrivateFormat.Raw,
+                    encryption_algorithm=serialization.NoEncryption()
+                )
+            )
+
+        # Save public key
+        with open("MasterLogPublicKey.key", "wb") as f:
+            f.write(
+                publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                )
+            )
+    
+    return privateKey, publicKey
+
+def DecodeLog(logPath):
+    with open(logPath, "r") as f:
+
+        lines = f.readlines()
+        
+        ephemeralKeyLine = lines.pop(0).strip().split(" - ")
+        ephemeralPublicKey = x25519.X25519PublicKey.from_public_bytes(base64.b64decode(ephemeralKeyLine[1]))
+        sharedSecret = logPrivateKey.exchange(ephemeralPublicKey)
+        derivedKey = AESGCM(HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b"Log Encryption"
+        ).derive(sharedSecret))
+        
+        for line in lines:
+            if(line == "\n"):
+                continue
+            line = line.strip().split(" - ")
+            nonce = base64.b64decode(line[0])
+            ciphertext = base64.b64decode(line[1])
+            print(derivedKey.decrypt(nonce, ciphertext, None).decode())
+
+        
+
 #Test certificate creation
-CreateUserCertificate("John Smith", 
+"""CreateUserCertificate("John Smith", 
     "JohnSmith1", 
     "Head Engineer", 
     "ExampleB64", 
@@ -176,3 +234,7 @@ CreateResourceCertificate(
     "01/01/30",
     12345,
     1)
+
+"""
+logPrivateKey, logPublicKey = CreateLogKey()
+DecodeLog("Resource1FileInfo.txt")

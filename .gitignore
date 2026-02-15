@@ -5,3 +5,5 @@
 !ExampleResourceCert.json
 !ExampleUserCert.json
 *.pdf
+*.key
+*.txt

@@ -10,7 +10,7 @@ import threading
 from cryptography.hazmat.primitives import hashes
 from datetime import datetime, timezone, timedelta
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, x25519
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -26,6 +26,8 @@ SESSION_TOKEN_EXPIRY_TIME = timedelta(minutes=30)
 #Runtime variables
 loadedAES = dict()
 privateKey, privateKeyBytes, publicKey, publicKeyBytes = None, None, None, None
+masterKey = None
+logKey = None
 
 #Logging setup
 logFormatter = colorlog.ColoredFormatter(
@@ -106,11 +108,50 @@ def CreateECCKeypair():
     publicKeyBytes = publicKey.public_bytes(
         encoding=serialization.Encoding.X962,
         format=serialization.PublicFormat.UncompressedPoint
-    )    
+    )  
+
+def LoadLogEncryptor():
+    with open("MasterLogPublicKey.key", "rb") as f:
+        masterPublicKey = x25519.X25519PublicKey.from_public_bytes(f.read())
+    
+     # Generate ephemeral key
+    ephemeralPrivateKey = x25519.X25519PrivateKey.generate()
+    ephemeralPublicKey = ephemeralPrivateKey.public_key()
+
+    # Derive shared secret
+    sharedSecret = ephemeralPrivateKey.exchange(masterPublicKey)
+
+    # Derive AES-256 key
+    derivedKey = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"Log Encryption"
+    ).derive(sharedSecret)
+    
+    with open(f"{RESOURCE_LABEL}FileInfo.txt", "w") as f:
+       f.write(f"Ephemeral Public Key - {base64.b64encode(ephemeralPublicKey.public_bytes_raw()).decode()}\n")
+    
+    return AESGCM(derivedKey)
+
+def AddEncryptedLog(level : str, messageToLog : str):
+    message = f"{datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S")} {level} : {messageToLog}".encode()
+    
+    nonce = os.urandom(12)
+    ciphertext = logKey.encrypt(nonce, message, None)
+    with open(f"{RESOURCE_LABEL}FileInfo.txt", "a") as f:
+        f.write(f"{base64.b64encode(nonce).decode()} - {base64.b64encode(ciphertext).decode()}\n")
+    
 
 def Start():
-    global privateKey, privateKeyBytes, publicKey, publicKeyBytes
+    global privateKey, privateKeyBytes, publicKey, publicKeyBytes, masterKey, logKey
     #Listening for information
+    
+    logKey = LoadLogEncryptor()
+    
+    with open(MASTER_PUBLIC_KEY_PEM, "rb") as f:
+        masterKey = serialization.load_pem_public_key(f.read())
+    
     incomingConnectionSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     incomingConnectionSocket.bind((INCOMING_CONNECTION_HOST, INCOMING_CONNECTION_PORT))
     incomingConnectionSocket.listen(5)
@@ -188,9 +229,6 @@ def HandleClient(clientSocket):
         
         #Signature test
         signature = clientCertInfo.pop("Signature")
-        
-        with open(MASTER_PUBLIC_KEY_PEM, "rb") as f:
-            masterKey = serialization.load_pem_public_key(f.read())
 
         try:
             masterKey.verify(
@@ -264,6 +302,11 @@ def HandleClient(clientSocket):
             logger.warning("Signature invalid")
             return
         
+        #Checking the timestamp on the token
+        if(int(datetime.now(timezone.utc).timestamp()) > userToken["Expiry Time"]):
+            logger.warning(f"Time expired on token")
+            return
+        
         #Checking if the user has correct level permissions for the file they are requesting
         conn = sqlite3.connect(f"{RESOURCE_LABEL}.db")
         cursor = conn.cursor()
@@ -309,6 +352,10 @@ def HandleClient(clientSocket):
                     nonceCounter += 1   
         
             logger.info(f"All blocks sent")
+            AddEncryptedLog("INFO", f"SUCCESS : {userToken["ID"]} requested {fileID} - successful delivery")
+        else:
+            AddEncryptedLog("INFO", f"FAILURE : {userToken["ID"]} requested {fileID} - insufficient permissions")
+
 
     #Closing the socket
     clientSocket.shutdown(socket.SHUT_RDWR)
