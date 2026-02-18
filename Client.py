@@ -215,7 +215,46 @@ def RequestFileFromResource(aes, sessionToken, fileID):
     logger.info(f"All blocks received - now closing")
     resourceSocket.shutdown(socket.SHUT_RDWR)
     resourceSocket.close() 
+
+def UploadFileToResource(aes, sessionToken, filePath):
+    resourceSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    resourceSocket.connect(("127.0.0.1", SERVER_CONNECTION_PORT))
     
+    fileID = os.path.basename(filePath)
+    fileSize = os.path.getsize(filePath)
+    #Filing the request
+    requestNonce = os.urandom(12)
+    request = {"Nonce" : base64.b64encode(requestNonce).decode(), 
+                "ID" : userID,
+                "Type" : "File Upload Request", 
+                "Token" : base64.b64encode(aes.encrypt(requestNonce, json.dumps(sessionToken).encode(), None)).decode(), 
+                "FileID" : base64.b64encode(aes.encrypt(IncrementNonce(requestNonce, 1), fileID.encode(), None)).decode(),
+                "File Size" : base64.b64encode(aes.encrypt(IncrementNonce(requestNonce, 2), fileSize.to_bytes(64, "big"), None)).decode()}
+
+    resourceSocket.send(json.dumps(request).encode().ljust(1024, b"\0"))
+    #Getting the return metadata
+    resourceReturnMetadataEncrypted = resourceSocket.recv(1024).rstrip(b"\0")
+    resourceReturnMetadata = json.loads(aes.decrypt(IncrementNonce(requestNonce, 3), resourceReturnMetadataEncrypted, None).decode())
+    logger.info(f"Resource Return Metadata : {resourceReturnMetadata}")
+    if(resourceReturnMetadata["Status"] != "Allowed"):
+        logger.warning(f"File upload denied - returning")
+        return
+
+    bytesSent = 0
+    nonceCounter = 4
+    
+    logger.debug(f"File path : {filePath}")
+    
+    with open(filePath, "rb") as f:
+        while(bytesSent < fileSize):
+            decryptedBlock = f.read(min(65536, fileSize - bytesSent))
+            encryptedBlock = aes.encrypt(IncrementNonce(requestNonce, nonceCounter), decryptedBlock, None)
+            print(f"Encrypt len : {len(encryptedBlock)}")
+            resourceSocket.send(encryptedBlock)
+            bytesSent += min(65536, fileSize - bytesSent)
+            nonceCounter += 1   
+        
+
 #Ephemeral Key Creation
 def CreateEphemeralECCKeypair():
     privateEphemeralKey = ec.generate_private_key(ec.SECP256R1())
@@ -266,6 +305,6 @@ def Start():
     #Resrouce ephmeral pair
     privateEphemeralKey, _, _, publicEphemeralKeyBytes = CreateEphemeralECCKeypair()
     aes, sessionToken = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
-    RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
-    
+    #RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
+    UploadFileToResource(aes, sessionToken, r"C:\Users\iniga\OneDrive\Programming\StunTest.py")
 Start()
