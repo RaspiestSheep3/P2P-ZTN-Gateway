@@ -409,12 +409,14 @@ def HandleClient(clientSocket):
         requestResponseEncrypted = aes.encrypt(IncrementNonce(requestNonce, 2), json.dumps(requestResponse).encode(), None)
         clientSocket.send(requestResponseEncrypted.ljust(1024, b"\0"))
         if(status != "Allowed"):
+            AddEncryptedLog("INFO", f"FAILURE : {userToken["ID"]} requested deletion of {fileID} - insufficient permissions")
             return
         
         #Deleting the file off the system
         cursor.execute("""DELETE FROM resourceFiles WHERE fileLabel = ?""", (fileID,))
         conn.commit()
         os.remove(row[1])
+        AddEncryptedLog("INFO", f"SUCESS : {userToken["ID"]} requested deletion of {fileID}")
         
     elif(receivedMessage["Type"] == "File Upload Request"):
         requestNonce = base64.b64decode(receivedMessage["Nonce"])
@@ -470,6 +472,7 @@ def HandleClient(clientSocket):
         requestResponseEncrypted = aes.encrypt(IncrementNonce(requestNonce, 3), json.dumps(requestResponse).encode(), None)
         clientSocket.send(requestResponseEncrypted.ljust(1024, b"\0"))
         if(status != "Allowed"):
+            AddEncryptedLog("INFO", f"FAILURE : {userToken["ID"]} requested upload of {fileID} - insufficient permissions")
             return
         
         fileSize = int.from_bytes(aes.decrypt(IncrementNonce(requestNonce, 2), base64.b64decode(receivedMessage["File Size"]), None), byteorder="big")
@@ -485,7 +488,7 @@ def HandleClient(clientSocket):
                 incrementCounter += 1
         
         logger.info(f"All blocks received - now closing")
-        
+        AddEncryptedLog("INFO", f"SUCESS : {userToken["ID"]} requested upload of {fileID}")
         
     #Closing the socket
     clientSocket.shutdown(socket.SHUT_RDWR)
