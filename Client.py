@@ -254,6 +254,30 @@ def UploadFileToResource(aes, sessionToken, filePath):
             bytesSent += min(65536, fileSize - bytesSent)
             nonceCounter += 1   
         
+def DeleteFileFromResource(aes, sessionToken, fileID):
+    #Defining the connection
+    resourceSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    resourceSocket.connect(("127.0.0.1", SERVER_CONNECTION_PORT))
+    
+    #Filing the request
+    requestNonce = os.urandom(12)
+    request = {"Nonce" : base64.b64encode(requestNonce).decode(), 
+               "ID" : userID,
+               "Type" : "File Deletion Request", 
+               "Token" : base64.b64encode(aes.encrypt(requestNonce, json.dumps(sessionToken).encode(), None)).decode(), 
+               "FileID" : base64.b64encode(aes.encrypt(IncrementNonce(requestNonce, 1), fileID.encode(), None)).decode()}
+
+    resourceSocket.send(json.dumps(request).encode().ljust(1024, b"\0"))
+    
+    #Getting the return metadata
+    resourceReturnMetadataEncrypted = resourceSocket.recv(1024).rstrip(b"\0")
+    resourceReturnMetadata = json.loads(aes.decrypt(IncrementNonce(requestNonce, 2), resourceReturnMetadataEncrypted, None).decode())
+    logger.info(f"Resource Return Metadata : {resourceReturnMetadata}")
+    if(resourceReturnMetadata["Status"] != "Allowed"):
+        logger.warning(f"File deletion denied - returning")
+    
+    resourceSocket.shutdown(socket.SHUT_RDWR)
+    resourceSocket.close() 
 
 #Ephemeral Key Creation
 def CreateEphemeralECCKeypair():
@@ -307,4 +331,5 @@ def Start():
     aes, sessionToken = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
     #RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
     UploadFileToResource(aes, sessionToken, r"C:\Users\iniga\OneDrive\Programming\StunTest.py")
+    DeleteFileFromResource(aes, sessionToken, "StunTest.py")
 Start()

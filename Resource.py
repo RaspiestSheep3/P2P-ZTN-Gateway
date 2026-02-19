@@ -355,6 +355,67 @@ def HandleClient(clientSocket):
             AddEncryptedLog("INFO", f"SUCCESS : {userToken["ID"]} requested {fileID} - successful delivery")
         else:
             AddEncryptedLog("INFO", f"FAILURE : {userToken["ID"]} requested {fileID} - insufficient permissions")
+    elif(receivedMessage["Type"] == "File Deletion Request"):
+        requestNonce = base64.b64decode(receivedMessage["Nonce"])
+        aes = loadedAES[receivedMessage["ID"]]
+        userToken = json.loads(aes.decrypt(requestNonce, base64.b64decode(receivedMessage["Token"]), None).decode())
+        fileID = aes.decrypt(IncrementNonce(requestNonce, 1), base64.b64decode(receivedMessage["FileID"]), None).decode()
+
+        #Checking the signature is intact
+        signatureRaw = base64.b64decode(userToken["Signature"])
+        
+        userToken.pop("Signature")
+        
+        try:
+            publicKey.verify(
+                signatureRaw,
+                json.dumps(userToken).encode(),
+                ec.ECDSA(hashes.SHA256())
+            )
+        
+            logger.debug("Signature correct")
+        
+        except InvalidSignature:
+            logger.warning("Signature invalid")
+            return
+        
+        #Checking the timestamp on the token
+        if(int(datetime.now(timezone.utc).timestamp()) > userToken["Expiry Time"]):
+            logger.warning(f"Time expired on token")
+            return
+        
+        #Checking if the user has correct level permissions for the file they are requesting
+        conn = sqlite3.connect(f"{RESOURCE_LABEL}.db")
+        cursor = conn.cursor()
+        cursor.execute("""SELECT * FROM resourceFiles WHERE fileLabel = ?""", (fileID,))
+        row = cursor.fetchone()
+        
+        status = "Not Allowed"
+        metadata = None
+        if(row != None):
+            acceptedLevels = row[2].split(", ")
+            logger.debug(f"Levels : {acceptedLevels}, {userToken["Permissions"]}")
+            for level in (userToken["Permissions"]):
+                if(level in acceptedLevels and userToken["Permissions"][level] == "WRITE"):
+                    status = "Allowed"
+                    break
+        
+            if(status == "Allowed"):
+                metadata = {}
+        else:
+            logger.debug(f"row : {row}, levels : {acceptedLevels}")
+                
+        requestResponse = {"Status" : status, "Metadata" : metadata}
+        requestResponseEncrypted = aes.encrypt(IncrementNonce(requestNonce, 2), json.dumps(requestResponse).encode(), None)
+        clientSocket.send(requestResponseEncrypted.ljust(1024, b"\0"))
+        if(status != "Allowed"):
+            return
+        
+        #Deleting the file off the system
+        cursor.execute("""DELETE FROM resourceFiles WHERE fileLabel = ?""", (fileID,))
+        conn.commit()
+        os.remove(row[1])
+        
     elif(receivedMessage["Type"] == "File Upload Request"):
         requestNonce = base64.b64decode(receivedMessage["Nonce"])
         aes = loadedAES[receivedMessage["ID"]]
@@ -414,7 +475,7 @@ def HandleClient(clientSocket):
         fileSize = int.from_bytes(aes.decrypt(IncrementNonce(requestNonce, 2), base64.b64decode(receivedMessage["File Size"]), None), byteorder="big")
         bytesToReceive = fileSize
         incrementCounter = 4
-        with open(fileID, "wb") as f:
+        with open(row[1], "wb") as f:
             while(bytesToReceive > 0):
                 encryptedBlock = clientSocket.recv(min(bytesToReceive + 16, 65536 + 16))
                 logger.debug(f"Length : {len(encryptedBlock)}")
