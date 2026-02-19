@@ -8,12 +8,12 @@ import sqlite3
 import colorlog
 import threading
 from cryptography.hazmat.primitives import hashes
-from datetime import datetime, timezone, timedelta
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ec, x25519
+from datetime import datetime, timezone, timedelta, date
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import ec, x25519
 
 #Constants
 INCOMING_CONNECTION_HOST = "0.0.0.0"
@@ -229,6 +229,13 @@ def HandleClient(clientSocket):
         
         #Signature test
         signature = clientCertInfo.pop("Signature")
+
+        #Cert expiry check
+        clientCertExpiryTimeSplit = clientCertInfo["Expiry Date"].split("/")
+        clientCertExpiryTime = date(int(clientCertExpiryTimeSplit[2]), int(clientCertExpiryTimeSplit[1]), int(clientCertExpiryTimeSplit[0]))
+        if(clientCertExpiryTime < date.today()):
+            AddEncryptedLog("WARNING", f"Client {clientCertInfo["ID"]} is signing in with an expired cert")
+            return
 
         try:
             masterKey.verify(
