@@ -1,9 +1,10 @@
 import os
 import json
-import socket
 import base64
 import logging
+import keyring
 import colorlog
+from argon2 import PasswordHasher
 from werkzeug.utils import secure_filename
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, x25519
@@ -206,7 +207,20 @@ def DecodeLog(logPath):
             ciphertext = base64.b64decode(line[1])
             print(derivedKey.decrypt(nonce, ciphertext, None).decode())
 
-        
+def CreateClientLogin(clientID, clientPassword):
+    ph = PasswordHasher()
+    keyring.set_password("Decentralised-File-System", clientID, ph.hash(clientPassword))
+
+def WizardInitialisation(masterPassword):
+    ph = PasswordHasher()
+    keyring.set_password("Decentralised-File-System", "master", ph.hash(masterPassword))
+
+    CreateECCKeypair()
+
+def AttemptMasterLogin(password):
+    passwordHash = keyring.get_password("Decentralised-File-System", "master")
+    ph = PasswordHasher()
+    ph.verify(passwordHash, password)
 
 #Test certificate creation
 """CreateUserCertificate("John Smith", 
@@ -233,5 +247,12 @@ CreateResourceCertificate(
     1)
 
 """
+
 logPrivateKey, logPublicKey = CreateLogKey()
+
+#WizardInitialisation("TestMasterPassword")
+
+#CreateClientLogin("JohnSmith1", "John123")
+AttemptMasterLogin("TestMasterPassword")
+
 DecodeLog("Resource1FileInfo.txt")

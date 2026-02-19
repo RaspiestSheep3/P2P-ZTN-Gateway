@@ -4,7 +4,9 @@ import json
 import socket
 import base64
 import logging
+import keyring
 import colorlog
+from argon2 import PasswordHasher
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
@@ -15,11 +17,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 INCOMING_CONNECTION_HOST = "0.0.0.0"
 INCOMING_CONNECTION_PORT = 12346
 SERVER_CONNECTION_PORT = 12345
-CERT_PATH = "UserJohnSmith1Certificate.json"
 MASTER_PUBLIC_KEY_PEM = "MasterECCPublicKey.pem"
 
 #Runtime variables
 userID = None
+certPath = None
 
 #Logging setup
 logFormatter = colorlog.ColoredFormatter(
@@ -132,7 +134,7 @@ def ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes):
     aes = AESGCM(serverAESKey) 
     
     #Loading in the cert info 
-    with open(CERT_PATH, "r") as fileHandle:
+    with open(certPath, "r") as fileHandle:
         certInfo = json.loads(fileHandle.read())
     
     userID = certInfo["ID"]
@@ -297,6 +299,18 @@ def CreateEphemeralECCKeypair():
     
     return privateEphemeralKey, publicEphemeralKey, privateEphemeralKeyBytes, publicEphemeralKeyBytes
 
+def LoginUser(username, password):
+    global certPath
+    passwordKeyring = keyring.get_password("Decentralised-File-System", username)
+    ph = PasswordHasher()
+    try:
+        (ph.verify(passwordKeyring, password))
+    except:
+        logger.warning("Login Failed")
+        return
+    
+    certPath = f"User{userID}Certficate.json"
+
 resourceSocket, aes, privateKey, publicKey, privateKeyBytes, publicKeyBytes = None, None, None, None, None, None
 
 def Start():
@@ -332,4 +346,6 @@ def Start():
     #RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
     UploadFileToResource(aes, sessionToken, r"C:\Users\iniga\OneDrive\Programming\StunTest.py")
     DeleteFileFromResource(aes, sessionToken, "StunTest.py")
+
+LoginUser("JohnSmith1", "John123")
 Start()
