@@ -309,7 +309,7 @@ def LoginUser(username, password):
         logger.warning("Login Failed")
         return
     
-    certPath = f"User{userID}Certficate.json"
+    certPath = os.path.join(os.getcwd(), f"User{username}Certificate.json")
 
 resourceSocket, aes, privateKey, publicKey, privateKeyBytes, publicKeyBytes = None, None, None, None, None, None
 
@@ -343,9 +343,10 @@ def Start():
     #Resrouce ephmeral pair
     privateEphemeralKey, _, _, publicEphemeralKeyBytes = CreateEphemeralECCKeypair()
     aes, sessionToken = ConnectToResource(privateEphemeralKey, publicEphemeralKeyBytes)
-    #RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
-    UploadFileToResource(aes, sessionToken, r"C:\Users\iniga\OneDrive\Programming\StunTest.py")
-    DeleteFileFromResource(aes, sessionToken, "StunTest.py")
+    RequestFileFromResource(aes, sessionToken, "Test PDF.pdf")
+    #UploadFileToResource(aes, sessionToken, r"C:\Users\iniga\OneDrive\Programming\StunTest.py")
+    
+    #DeleteFileFromResource(aes, sessionToken, "StunTest.py")
 
 LoginUser("JohnSmith1", "John123")
 Start()

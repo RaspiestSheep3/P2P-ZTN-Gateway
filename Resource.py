@@ -232,7 +232,7 @@ def HandleClient(clientSocket):
 
         #Cert expiry check
         clientCertExpiryTimeSplit = clientCertInfo["Expiry Date"].split("/")
-        clientCertExpiryTime = date(int(clientCertExpiryTimeSplit[2]), int(clientCertExpiryTimeSplit[1]), int(clientCertExpiryTimeSplit[0]))
+        clientCertExpiryTime = date(int("20" + clientCertExpiryTimeSplit[2]), int(clientCertExpiryTimeSplit[1]), int(clientCertExpiryTimeSplit[0]))
         if(clientCertExpiryTime < date.today()):
             AddEncryptedLog("WARNING", f"Client {clientCertInfo["ID"]} is signing in with an expired cert")
             return
